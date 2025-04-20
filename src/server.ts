@@ -1,16 +1,26 @@
 import express, { Request, Response, Application, RequestHandler } from 'express';
-import { AutocratClient } from '@metadaoproject/futarchy/dist/v0.4/AutocratClient';
-import { Connection, PublicKey, Keypair } from '@solana/web3.js';
+import { AutocratClient, PriceMath } from '@metadaoproject/futarchy/v0.4';
+import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import * as anchor from '@coral-xyz/anchor';
-import {getOrCreateAssociatedTokenAccount, getMint} from '@solana/spl-token';
-import { PriceMath } from '@metadaoproject/futarchy/dist/v0.4';
+import { getMint, getOrCreateAssociatedTokenAccount } from '@solana/spl-token';
 
 const app: Application = express();
 const port = process.env.PORT || 9000;
 
+const dummyKeypair = Keypair.generate();
+
 // Initialize Futarchy clients
-const connection = new Connection('https://api.mainnet-beta.solana.com');
-const provider = anchor.AnchorProvider.env();
+const connection = new Connection("insert-connection-url-here");
+const provider = new anchor.AnchorProvider(
+    connection,
+    {
+      publicKey: dummyKeypair.publicKey,
+      signTransaction: async (tx) => tx,
+      signAllTransactions: async (txs) => txs,
+    },
+    { commitment: 'confirmed' }
+  );
+  
 const autocratProgram = AutocratClient.createClient({ provider });
 
 // Middleware
@@ -48,7 +58,7 @@ app.get('/daos/:id/proposals', async (req: Request, res: Response) => {
   try {
     const daoAddress = new PublicKey(req.params.id);
     const proposals = await autocratProgram.autocrat.account.proposal.all();
-    const filteredProposals = proposals.filter(prop => prop.account.dao === daoAddress);
+    const filteredProposals = proposals.filter((prop: any) => prop.account.dao.toString() === daoAddress.toString());
     res.json({ success: true, proposals: filteredProposals });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch proposals' });
