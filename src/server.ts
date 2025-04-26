@@ -691,6 +691,110 @@ app.post("/proposals/:id/sell-fail", (async (req: Request, res: Response) => {
   }
 }) as RequestHandler);
 
+// Redeem tokens
+app.post("/proposals/:id/redeem", (async (req: Request, res: Response) => {
+  try {
+    const { user } = req.body;
+
+    if (!user) {
+      return res.status(400).json({ error: "User public key is required" });
+    }
+
+    const userPublicKey = new PublicKey(user);
+
+    // Get the proposal
+    const proposalAddress = new PublicKey(req.params.id);
+    const proposal = await autocratProgram.getProposal(proposalAddress);
+
+    if (!proposal) {
+      return res.status(404).json({ error: "Proposal not found" });
+    }
+
+    // Check if proposal is in executed state
+    if (!proposal.state.executed) {
+      return res.status(400).json({ error: "Proposal must be in executed state to redeem tokens" });
+    }
+
+    // Initialize vault client
+    const vaultClient = ConditionalVaultClient.createClient({ provider });
+
+    // Fetch both vaults
+    const baseVault = await vaultClient.fetchVault(proposal.baseVault);
+    const quoteVault = await vaultClient.fetchVault(proposal.quoteVault);
+
+    if (!baseVault || !quoteVault) {
+      return res.status(404).json({ error: "Vaults not found" });
+    }
+
+    // Get the user's token accounts for both conditional tokens
+    const baseTokenAddress = getAssociatedTokenAddressSync(
+      baseVault.underlyingTokenMint,
+      userPublicKey
+    );
+    const quoteTokenAddress = getAssociatedTokenAddressSync(
+      quoteVault.underlyingTokenMint,
+      userPublicKey
+    );
+
+    const baseTokenAccount = await getAccount(connection, baseTokenAddress);
+    const quoteTokenAccount = await getAccount(connection, quoteTokenAddress);
+
+    // Get the token decimals
+    const baseMint = await getMint(connection, baseVault.underlyingTokenMint);
+    const quoteMint = await getMint(connection, quoteVault.underlyingTokenMint);
+    const baseDecimals = baseMint.decimals;
+    const quoteDecimals = quoteMint.decimals;
+
+    // Convert balances to human-readable format
+    const baseBalance = Number(baseTokenAccount.amount) / Math.pow(10, baseDecimals);
+    const quoteBalance = Number(quoteTokenAccount.amount) / Math.pow(10, quoteDecimals);
+
+    // Check if user has any tokens to redeem
+    if (baseBalance === 0 && quoteBalance === 0) {
+      return res.status(400).json({ 
+        error: "No tokens to redeem",
+        baseBalance,
+        quoteBalance
+      });
+    }
+
+    // Create redeem instructions for both tokens
+    const baseRedeemIx = vaultClient.redeemTokensIx(
+      proposal.question,
+      proposal.baseVault,
+      baseVault.underlyingTokenMint,
+      2, // numOutcomes (PASS/FAIL)
+      userPublicKey,
+      userPublicKey // payer is same as user
+    );
+
+    const quoteRedeemIx = vaultClient.redeemTokensIx(
+      proposal.question,
+      proposal.quoteVault,
+      quoteVault.underlyingTokenMint,
+      2, // numOutcomes (PASS/FAIL)
+      userPublicKey,
+      userPublicKey // payer is same as user
+    );
+
+    // Create transaction with both instructions
+    const redeemTx = new Transaction()
+      .add(await baseRedeemIx.instruction())
+      .add(await quoteRedeemIx.instruction());
+
+    res.json({
+      success: true,
+      redeemTx,
+      baseBalance,
+      quoteBalance,
+      message: "Redeem transaction created successfully"
+    });
+  } catch (error) {
+    console.error("Error creating redeem transaction:", error);
+    res.status(500).json({ error: "Failed to create redeem transaction" });
+  }
+}) as RequestHandler);
+
 // Start server
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
